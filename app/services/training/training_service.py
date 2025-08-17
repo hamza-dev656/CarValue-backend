@@ -1,11 +1,13 @@
 # app/services/training_service.py
 import os, csv, time, logging
 from datetime import datetime
+from time import time as _now
 from typing import Optional, Iterable, Dict, Tuple
 
 import numpy as np
 import pandas as pd
 from catboost import CatBoostRegressor, Pool
+from sklearn.model_selection import train_test_split
 
 from app.repositories.vehicle_repository import VehicleRepository
 from app.services.model_registry.model_registry import ModelRegistry, ModelMeta
@@ -18,6 +20,8 @@ from app.services.training.model_utils import (
 )
 from scripts.data_export import prepare_training_data
 from app.config.model_config import EARLY_STOP
+from app.models.vehicle import Vehicle
+from app import db
 
 # -------- Logging --------
 log = logging.getLogger("training")
@@ -73,7 +77,6 @@ class TrainingService:
         log.info(f"[GLOBAL] Model evaluation: RMSE% = {rmse_pct:.2f} (n_val={len(y_true):,})")
 
         # Save trained model
-        from time import time as _now
         fname = f"global_{data_version}.cbm"
         path, sha256, size = TrainingService.registry.save_catboost(model, fname)
         
@@ -98,115 +101,98 @@ class TrainingService:
         return meta
 
     @staticmethod
+
     def train_local_from_db(year: int, make: str, model_name: str, data_version: str) -> Optional[ModelMeta]:
         """
-        Train a local model for specific year/make/model from database data.
-        Called by background thread when hit threshold is reached.
+        Train a local model for specific year/make/model from database data,
+        using a FIXED feature schema to match serve-time prep_row_for_local_model:
+
+            feature_cols = ['year', 'listing_mileage', 'style', 'driven_wheels', 'fuel_type']
+            cat_features  = [2, 3, 4]   # style, driven_wheels, fuel_type
+
+        This ensures CatBoost feature names/order are identical at train and serve time.
         """
         log.info(f"[LOCAL {year}-{make}-{model_name}] starting training (data_version={data_version})")
-        
+
         try:
-            from app.models.vehicle import Vehicle
-            from app import db
-            
-            # Get data for this specific year/make/model
+            # --- 1) Collect rows for this segment ---
             vehicles = db.session.query(Vehicle).filter(
                 Vehicle.year == year,
                 Vehicle.make == make,
                 Vehicle.model == model_name,
                 Vehicle.listing_price.isnot(None),
-                Vehicle.listing_mileage.isnot(None)
+                Vehicle.listing_mileage.isnot(None),
             ).all()
-            
+
             if len(vehicles) < 50:
                 log.warning(f"[LOCAL {year}-{make}-{model_name}] insufficient data ({len(vehicles)} records)")
                 return None
-            
-            log.info(f"[LOCAL {year}-{make}-{model_name}] found {len(vehicles)} records")
-            
-            # Convert to DataFrame
+
             rows = []
             for v in vehicles:
-                if v.listing_price and v.year:
-                    rows.append({
-                        "listing_price": float(v.listing_price),
-                        "year": v.year,
-                        "make": v.make,
-                        "model": v.model,
-                        "trim": v.trim,
-                        "listing_mileage": v.listing_mileage or 0,
-                        "dealer_state": v.dealer_state,
-                        "exterior_color": v.exterior_color,
-                        "style": v.style,
-                        "driven_wheels": v.driven_wheels,
-                        "fuel_type": v.fuel_type,
-                        "interior_color": v.interior_color,
-                        "used": getattr(v, "used", None),
-                        "certified": getattr(v, "certified", None),
-                        "listing_status": getattr(v, "listing_status", None),
-                        "last_seen_date": getattr(v, "last_seen_date", None),
-                    })
-            
+                # Only fields we need + label
+                rows.append({
+                    "listing_price": float(v.listing_price),
+                    "year": v.year,
+                    "listing_mileage": v.listing_mileage,
+                    "style": v.style,
+                    "driven_wheels": v.driven_wheels,
+                    "fuel_type": v.fuel_type,
+                })
+
             if len(rows) < 50:
                 log.warning(f"[LOCAL {year}-{make}-{model_name}] insufficient clean data ({len(rows)} records)")
                 return None
-                
+
             df = pd.DataFrame(rows)
-            
-            # Process features - simplified approach for local training
-            # Add log_price target
-            df['log_price'] = np.log1p(df['listing_price'])
-            
-            # Simple train/test split
-            from sklearn.model_selection import train_test_split
+
+            # --- 2) Coerce types & fill missing to lock schema/dtypes ---
+            df["year"] = pd.to_numeric(df["year"], errors="coerce").fillna(year).astype("int64")
+            df["listing_mileage"] = pd.to_numeric(df["listing_mileage"], errors="coerce").fillna(0.0).astype("float64")
+
+            for c in ["style", "driven_wheels", "fuel_type"]:
+                df[c] = df[c].fillna("Unknown").astype(str)
+
+            # Label in log-space (serve: expm1 back to price)
+            df["log_price"] = np.log1p(df["listing_price"].astype(float))
+
+            # --- 3) Fixed feature schema (MUST match serve time) ---
+            feature_cols = ["year", "listing_mileage", "style", "driven_wheels", "fuel_type"]
+            cat_features = [2, 3, 4]  # indices in feature_cols
+
+            # Train/validation split
             train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
-            
             if len(train_df) < 30:
                 log.warning(f"[LOCAL {year}-{make}-{model_name}] insufficient training data ({len(train_df)} records)")
                 return None
-            
-            log.info(f"[LOCAL {year}-{make}-{model_name}] training CatBoost with {len(train_df)} train, {len(test_df)} test records...")
-            
-            # Define features (similar to global training columns)
-            feature_cols = ['year', 'listing_mileage']  # Start with numeric features
-            cat_features = []  # Will be categorical column indices
-            
-            # Add categorical features if they have reasonable cardinality
-            for col in ['trim', 'dealer_state', 'exterior_color', 'style', 'driven_wheels', 'fuel_type', 'interior_color']:
-                if col in train_df.columns:
-                    # Fill NaN and clean up
-                    train_df[col] = train_df[col].fillna('Unknown').astype(str)
-                    test_df[col] = test_df[col].fillna('Unknown').astype(str)
-                    if train_df[col].nunique() < 50:  # Reasonable cardinality
-                        feature_cols.append(col)
-                        cat_features.append(len(feature_cols) - 1)  # Track categorical indices
-            
-            # Prepare training data
-            X_train = train_df[feature_cols].fillna(0)
-            y_train = train_df['log_price']
-            X_test = test_df[feature_cols].fillna(0)
-            y_test = test_df['log_price']
-            
-            # Train CatBoost model directly
+
+            X_train = train_df[feature_cols].copy()
+            y_train = train_df["log_price"].copy()
+            X_test  = test_df[feature_cols].copy()
+            y_test  = test_df["log_price"].copy()
+
+            # --- 4) Train CatBoost with early stopping ---
             model = create_local_catboost_regressor(cat_features=cat_features)
-            
+
+            # Ensure pandas DataFrame is passed so CatBoost records feature names
             model.fit(X_train, y_train, eval_set=(X_test, y_test), early_stopping_rounds=50)
-            
-            # Evaluate
-            y_pred = model.predict(X_test)
+
+            # --- 5) Evaluate in price space & log ---
+            y_pred_log = model.predict(X_test)
+            y_pred_price = np.expm1(y_pred_log.astype(np.float64))
             y_true_price = np.expm1(y_test.astype(np.float64))
-            y_pred_price = np.expm1(y_pred.astype(np.float64))
-            
+
             rmse_pct = calculate_rmse_percentage(y_pred_price, y_true_price)
-            
-            log.info(f"[LOCAL {year}-{make}-{model_name}] RMSE%={rmse_pct:.2f} (n_train={len(train_df)}, n_test={len(test_df)})")
-            
-            # Save model
+            log.info(
+                f"[LOCAL {year}-{make}-{model_name}] "
+                f"features={feature_cols} cat_idx={cat_features} "
+                f"RMSE%={rmse_pct:.2f} (n_train={len(train_df)}, n_test={len(test_df)})"
+            )
+
+            # --- 6) Save artifact & register metadata ---
             fname = f"local_{year}_{make}_{model_name}_{data_version}.cbm"
             path, sha256, size = TrainingService.registry.save_catboost(model, fname)
-            
-            # Create meta
-            from time import time as _now
+
             meta = ModelMeta(
                 kind="local",
                 segment=f"{year}:{make}:{model_name}",
@@ -219,13 +205,11 @@ class TrainingService:
                 sha256=sha256,
                 size_bytes=size,
             )
-            
-            # Register model
+
             TrainingService.registry.register_model(meta)
-            
-            log.info(f"[LOCAL {year}-{make}-{model_name}] saved {path} ({size/1e6:.1f}MB) RMSE%={rmse_pct:.2f}")
+            log.info(f"[LOCAL {year}-{make}-{model_name}] saved {path} ({size/1e6:.1f}MB) sha256={sha256[:12]}…")
             return meta
-            
+
         except Exception as e:
             log.exception(f"[LOCAL {year}-{make}-{model_name}] training failed: {e}")
             return None

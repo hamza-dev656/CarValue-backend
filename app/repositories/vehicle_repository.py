@@ -138,3 +138,8 @@ class VehicleRepository:
 
         for v in q:
             yield v
+
+    @staticmethod
+    def get_all_vehicles():
+        """Get all vehicles for makes/models discovery"""
+        return Vehicle.query.all()

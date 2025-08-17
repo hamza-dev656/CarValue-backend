@@ -12,8 +12,10 @@ import threading
 import requests
 
 # ── Local imports ──────────────────────────────────────────────────────────────
+from flask import current_app
 from app.config.model_config import DATA_VERSION, LOCAL_TRAINER_URL
 from app.utils.cache_utils import acquire_training_lock, release_training_lock
+
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +70,6 @@ def _start_background_training(cache, year: int, make: str, model_name: str,
                                data_version: str) -> None:
     """Start background training thread"""
     # Capture the app instance from the current context
-    from flask import current_app
     app = current_app._get_current_object()
 
     def _training_job():

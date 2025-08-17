@@ -13,6 +13,7 @@ import requests
 
 # ── Local imports ──────────────────────────────────────────────────────────────
 from app.config.model_config import DATA_VERSION, LOCAL_TRAINER_URL
+from app.services.training_service import TrainingService
 from .cache_utils import acquire_training_lock, release_training_lock
 
 log = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ def _start_background_training(cache, year: int, make: str, model_name: str,
             # Import kept inside to avoid circular imports and ensure app context is ready.
             try:
                 log.info(f"[LOCAL {year}-{make}-{model_name}] background training thread started")
-                from app.services.training_service import TrainingService
+                
                 result = TrainingService.train_local_from_db(year, make, model_name, data_version)
                 if result:
                     log.info(f"[LOCAL {year}-{make}-{model_name}] training completed successfully")
