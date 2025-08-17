@@ -19,10 +19,10 @@ The system is optimized for **4–5M rows** via streaming exports, on-disk train
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                               API Clients                                  │
-│                 (Next.js, internal tools, integrations)                     │
+│                                      
 └────────────────────────────────────────────────────────────────────────────┘
-                 │  HTTPS                                                     
-                 ▼
+                             │  HTTPS                                                     
+                                ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                                 Flask API                                   │
 │  Controllers: /api/search, /api/makes-models                                │
@@ -60,13 +60,14 @@ The system is optimized for **4–5M rows** via streaming exports, on-disk train
 
 ## 2) Core Features
 
-* **Price estimate** rounded to nearest \$100.
-* **Comparable listings** (up to 100) used to contextualize the estimate.
+
 * **Confidence metrics** (RMSE% tiers → high/medium/low).
 * **Hybrid model selection** (local → global → fallback) with transparent `method` field.
 * **Hit-based auto-training** for popular Y/M/M segments.
 * **Background training** with locks to prevent duplicate jobs.
 * **Artifact & metadata registry** (disk `.cbm` + Redis JSON pointer).
+* **Price estimate** rounded to nearest \$100.
+* **Comparable listings** (up to 100) used to contextualize the estimate.
 * **TSV reuse** for global training (fast restarts, low RAM).
 
 ---
@@ -87,7 +88,6 @@ Query params: `year` (int), `make` (str), `model` (str), optional `mileage` (int
   "calculation_date": "2025-08-15T02:22:21Z",
   "method": "local_model | global_model | simple_average",
   "model_accuracy": {
-    "rmse": null,
     "rmse_percentage": 15.0,
     "confidence": "medium"
   },
@@ -277,22 +277,7 @@ DB tips: `ANALYZE` after bulk loads; periodic `VACUUM`; ensure composite indexes
 
 ---
 
-## 11) Testing Strategy
 
-* **Unit**: preprocessing helpers, winsorization, trim normalization, region mapping.
-* **Integration**: search endpoint happy-path, error cases, global present vs absent, hit-counter threshold path.
-* **Training**: smoke test on tiny fixtures (TSV + DB); assert artifact exists and meta registered; assert RMSE% finite.
-* **Load**: curl/xargs to exercise parallel requests; verify locks prevent duplicate training.
-
----
-
-## 12) Security & Compliance
-
-* Input validation + type coercion; ORM-bound parameters avoid SQL injection.
-* CORS restricted by environment; consider API keys/rate-limits for public endpoints.
-* Secrets via environment; artifacts are non-PII.
-
----
 
 ## 13) Operations Runbook
 
