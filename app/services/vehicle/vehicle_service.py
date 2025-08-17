@@ -167,37 +167,3 @@ class VehicleService:
             "method": "simple_average",
             "model_accuracy": {"confidence": "low", "rmse_percentage": None},
         }
-
-    @staticmethod
-    def get_makes_and_models() -> Dict:
-        """Get available makes and models organized by year"""
-        try:
-            vehicles = VehicleRepository.get_all_vehicles()
-
-            data = {}
-            for vehicle in vehicles:
-                if not vehicle.year or not vehicle.make or not vehicle.model:
-                    continue
-
-                year_str = str(vehicle.year)
-                make = vehicle.make
-                model = vehicle.model
-
-                if year_str not in data:
-                    data[year_str] = {}
-
-                if make not in data[year_str]:
-                    data[year_str][make] = set()
-
-                data[year_str][make].add(model)
-
-            # Convert sets to sorted lists
-            for year in data:
-                for mmake in data[year]:
-                    data[year][mmake] = sorted(list(data[year][mmake]))
-
-            return data
-
-        except Exception as e:
-            log.error(f"Error getting makes and models: {e}")
-            return {}

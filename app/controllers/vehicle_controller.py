@@ -73,20 +73,3 @@ def search() -> Tuple[Dict[str, Any], int]:
     except Exception as e:
         return {"error": str(e)}, 500
 
-
-@vehicle_bp.route("/makes-models", methods=["GET"])
-def get_makes_and_models() -> Tuple[Dict[str, Any], int]:
-    """
-    Get available makes and models
-    ---
-    responses:
-      200:
-        description: Dictionary of years with makes and models
-      500:
-        description: Internal server error
-    """
-    try:
-        data = VehicleService.get_makes_and_models()
-        return jsonify(data), 200
-    except Exception as e:
-        return {"error": str(e)}, 500

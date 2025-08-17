@@ -25,7 +25,7 @@ The system is optimized for **4–5M rows** via streaming exports, on-disk train
                                 ▼
 ┌────────────────────────────────────────────────────────────────────────────┐
 │                                 Flask API                                   │
-│  Controllers: /api/search, /api/makes-models                                │
+│  Controllers: /api/search                            │
 │  Service layer: VehicleService                                              │
 │  Caching: Flask-Caching (Redis)                                             │
 └────────────────────────────────────────────────────────────────────────────┘
