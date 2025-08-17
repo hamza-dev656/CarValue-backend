@@ -77,6 +77,11 @@ class VehicleService:
                         "rmse_percentage": round(getattr(local_meta, "rmse_pct", 0.0), 2),
                         "confidence": confidence_from_rmse_percentage(getattr(local_meta, "rmse_pct", None)),
                     },
+                    "model_meta": {
+                        "data_version": getattr(local_meta, "data_version", None),
+                        "artifact": (local_meta.path or "").split("/")[-1],
+                        "kind": getattr(local_meta, "kind", None),
+                    }
                 }
                 cache.set(ck, result, timeout=300)  # 5 minutes
                 return result
